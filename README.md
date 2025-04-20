@@ -6,4 +6,4 @@ Still debugging and polishing — currently investigating a bug in policy loss i
 
 The core structure is in place though.
 
-Also there are very unfinished notes on RL (I will add new material I figured out soon)
+Also there are very unfinished notes on RL (I will add new material I learned recently soon)
