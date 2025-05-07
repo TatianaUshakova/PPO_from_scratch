@@ -1,20 +1,20 @@
-#from gym_style_snake import Game
 import pygame # type: ignore
 import torch
 import torch.nn as nn
 import numpy as np
 import gym
 from stable_baselines3.common.callbacks import BaseCallback #this is for bench with ppo stable baseline - getting info from this ppo
+import pickle
 
 
 class PPO_trainer():
-    def __init__(self, game, policy_net, value_net, gamma):
+    def __init__(self, env, policy_net, value_net, gamma):
         self.policy_net = policy_net
         self.value_net = value_net
-        self.game = game #env or my_env
-        self.gamma= gamma #disc factor for reward
-        self.policy_optimizer = torch.optim.Adam(policy_net.parameters(), lr=1e-2)
-        self.value_optimizer =torch.optim.Adam(value_net.parameters(), lr=1e-3)
+        self.game = env
+        self.gamma= gamma #disc factor 
+        self.policy_optimizer = torch.optim.Adam(policy_net.parameters(), lr=3e-4)
+        self.value_optimizer =torch.optim.Adam(value_net.parameters(), lr=3e-4)
         
         self.metrics = {
             'timesteps': [],
@@ -33,8 +33,10 @@ class PPO_trainer():
         rews_to_go = []
         actions = []
         states = []
-        log_prob = []#to do - see if the log prob increase num quality
+        #log_prob = []#to do - see if the log prob increase num quality
         probs = []
+        episode_returns = []
+        episode_lengths = []
 
         def rewards_to_go(rewards, gamma):
                 for i in reversed(range(len(rewards)-1)):
@@ -44,33 +46,25 @@ class PPO_trainer():
         for traj in range(num_trajectories): 
             #to do - num of traj should be modified to limited amount of totmal data
                 
-            
-            state, _ = self.game.reset() #self.game.gamestart() - to do - rewrite my game for consitency w gym!
+            state, _ = self.game.reset() 
             done = False
             rewards = []
 
-            while not done: #not self.game.gameover:
+            while not done: 
 
                 if traj % 10 == 0:
                     self.game.render()
 
-                   
                 state_tensor = torch.tensor(state, dtype=torch.float32)
-
                 action = self.policy_net.get_action(state_tensor)
                 prob = self.policy_net.get_prob(state_tensor, action=action)
-                #print(f"Prob requires grad: {prob.requires_grad}")  
-                
-                #self.game.action = action#needed for game to play based on action
-                #reward = self.game.play_step() -- need to rewrite my game consistent with gym
-                
                 next_state, reward, terminated, truncated, _ = self.game.step(action.item())
-                    #action is torch tensor and should be converted to number 
-                    # to interact with env hence .item()
+                #action is torch tensor and should be converted to number to interact with env =>.item()
+                
                 done = terminated or truncated
                 
                 value = self.value_net(state_tensor)
-                
+
                 values.append(value)
                 actions.append(action)
                 rewards.append(reward)
@@ -78,10 +72,12 @@ class PPO_trainer():
                 probs.append(prob)
 
                 state = next_state
-                #так себе у меня игра написана - переделать - у меня состояние определется считая что есть опр действие которое не определено с самого начала (вроде?)
 
             #compute at the end of each game
-            rews_to_go+=rewards_to_go(rewards, self.gamma)
+            #rews_to_go+=rewards_to_go(rewards, self.gamma)
+            episode_returns.append(sum(rewards))
+            episode_lengths.append(len(rewards))
+            rews_to_go += rewards_to_go(rewards, self.gamma)
     
         # Stack all tensor lists for correct furthure batch processing - these are already tensors from collection
         states = torch.stack(states)         
@@ -90,13 +86,12 @@ class PPO_trainer():
         values = torch.stack(values)         
         probs = torch.stack(probs)          
 
-        # Convert regular number lists to tensors
         rews_to_go = torch.tensor(rews_to_go, dtype=torch.float32)  # These were numbers as rewards come from env
 
         #compute advantages on all data
         advantages = rews_to_go - values.detach()  #do not optimize values in policy training
 
-        return states, actions, rews_to_go, advantages, probs
+        return states, actions, rews_to_go, advantages, probs, episode_returns, episode_lengths
 
     def update_policy(self, actions, states, advantages, probs, epsilon_clip):       
         'update policy by PPO clip and fit value net by MSE'
@@ -116,7 +111,6 @@ class PPO_trainer():
         print(f"Any NaN in new probs? {torch.isnan(new_probs).any()}")
         print(f"Min new prob: {new_probs.min()}")
         
-        # Calculate and inspect ratio
         old_probs = probs.detach()
         probs_ratio = new_probs / (old_probs + 1e-8)
         print(f"\nRatio calculation:")
@@ -124,11 +118,8 @@ class PPO_trainer():
         print(f"Any NaN in ratio? {torch.isnan(probs_ratio).any()}")
         print(f"Any inf in ratio? {torch.isinf(probs_ratio).any()}")
         print(f"Ratio range: {probs_ratio.min()} to {probs_ratio.max()}")
-        
-        # Debug advantages
         print(f"Advantages range: min={advantages.min().item():.6f}, max={advantages.max().item():.6f}")
         
-        # separately - for debugging
         term1 = probs_ratio * advantages
         term2 = torch.clamp(probs_ratio, 1 - epsilon_clip, 1 + epsilon_clip) * advantages
         
@@ -137,11 +128,10 @@ class PPO_trainer():
         
         loss = -torch.minimum(term1, term2).mean()
         print(f"Final loss: {loss.item():.6f}")
-        
+
         self.policy_optimizer.zero_grad()
         loss.backward()
         
-        # Debuging gradients
         for name, param in self.policy_net.named_parameters():
             if param.grad is not None:
                 print(f"Gradient for {name}: min={param.grad.min().item():.6f}, max={param.grad.max().item():.6f}")
@@ -165,10 +155,10 @@ class PPO_trainer():
         make num_policy_updates of policy
         '''
         
-        states, actions, rews_to_go, advantages, old_probs = self.collect_trajectories(num_trajectories)
+        states, actions, rews_to_go, advantages, old_probs, episode_returns, episode_lengths = self.collect_trajectories(num_trajectories)
         
         value_loss = self.update_value_nn(rews_to_go, states)
-        
+
         policy_losses = []
         
         for update in range(num_policy_updates):
@@ -177,11 +167,13 @@ class PPO_trainer():
             #print(f"Policy update {update + 1}/{num_policy_updates}, Loss: {policy_loss:.6f}")
         
         return {
-            'mean_reward': rews_to_go.mean().item(),
-            'mean_length': len(states)/num_trajectories,
+            #'mean_reward': rews_to_go.mean().item(),
+            #'mean_length': len(states)/num_trajectories,
+            'mean_reward': np.mean(episode_returns),
+            'mean_length': np.mean(episode_lengths),
             'policy_loss': np.mean(policy_losses),  
             'value_loss': value_loss
-        }    
+        }
     
     def train(self, num_train_steps=100, num_trajectories_per_step=10, epsilon_clip=0.2, print_freq: None|int = 5, max_timesteps = None):
 
@@ -201,10 +193,10 @@ class PPO_trainer():
             if print_freq is not None:
                 if step_num % print_freq == 0:
                     print(f"Training step (Episode) number {step_num}: "
-                        f"Mean Reward: {one_step_metrics['mean_reward']:.2f}, "
-                        f"Mean Length: {one_step_metrics['mean_length']:.1f}, "
-                        f"Policy Loss: {one_step_metrics['policy_loss']:.4f}, "
-                        f"Value Loss: {one_step_metrics['value_loss']:.4f}")
+                      f"Mean Reward: {one_step_metrics['mean_reward']:.2f}, "
+                      f"Mean Length: {one_step_metrics['mean_length']:.1f}, "
+                      f"Policy Loss: {one_step_metrics['policy_loss']:.4f}, "
+                      f"Value Loss: {one_step_metrics['value_loss']:.4f}")
                     plot_learning_curves([self.metrics], ['PPO'], img_name = f'learning_curves_{step_num//print_freq}.png', save=True)
 
             if max_timesteps and self.total_timesteps>max_timesteps:
@@ -314,7 +306,7 @@ def plot_learning_curves(metrics_list, labels, img_name='learning_curves.png', s
     plt.subplot(141)
     for metrics, label in zip(metrics_list, labels):
         plt.plot(metrics['timesteps'], metrics['episode_rewards'], label=label)
-    plt.title('Episode rewards')
+        plt.title('Episode rewards')
     plt.xlabel('Timesteps')
     plt.ylabel('Mean Reward')
     plt.legend()
@@ -323,7 +315,7 @@ def plot_learning_curves(metrics_list, labels, img_name='learning_curves.png', s
     plt.subplot(142)
     for metrics, label in zip(metrics_list, labels):
         plt.plot(metrics['timesteps'], metrics['episode_lengths'], label=label)
-    plt.title('Episode Lengths')
+        plt.title('Episode Lengths')
     plt.xlabel('Timesteps')
     plt.ylabel('Mean Length')
     plt.legend()
@@ -347,7 +339,7 @@ def plot_learning_curves(metrics_list, labels, img_name='learning_curves.png', s
     plt.xlabel('Timesteps')
     plt.ylabel('Loss')
     plt.legend()
-
+        
     plt.tight_layout()
     if save:
         plt.savefig(img_name)
@@ -355,33 +347,40 @@ def plot_learning_curves(metrics_list, labels, img_name='learning_curves.png', s
     if show:
         plt.show(block=False)
         plt.pause(2)#seconds
-    plt.close()
+        plt.close()
 
 
 
-def benchmark(env, policy_net, value_net, gamma=0.99, num_train_steps=100, total_timesteps=10000 ):
-    #0.99 gamma matches sb3 ppo
-    #TO DO: need to select the num_train_steps def bigger than wht follows from total_timesteps
-    #and write it as a formula dependent on total_timesteps
+def benchmark(env, policy_net, value_net, gamma=0.99, num_train_steps=100, total_timesteps=50000, save_progress=True, visualize=True):
     try:
         from stable_baselines3 import PPO as SB3_PPO # type: ignore
     except:
         raise ImportError('Stable baseline is not installed')
     
+    #---training and saving of my ppo-------------------------------------------
     my_ppo = PPO_trainer(env, policy_net, value_net, gamma)
     my_ppo.train(num_train_steps, max_timesteps=total_timesteps)
 
-    #--stable baseline ppo
+    if save_progress:
+        torch.save(policy_net.state_dict(), "my_ppo_policy.pt")
+        torch.save(value_net.state_dict(), "my_ppo_value.pt")
+        print("Saved custom PPO policy and value networks.")
+
+    #--stable baseline ppo-------------------------------------------------------
     sb3_metrics = {
         'timesteps': [],
         'episode_rewards': [],
         'episode_lengths': []
     }
     sb3_ppo = SB3_PPO('MlpPolicy', env, verbose=1, gamma=gamma)
-            #Multi-Layer Perceptron policy, verboise - logging output
     sb3_callback = SB3MetricsCallback(sb3_metrics)
     sb3_ppo.learn(total_timesteps=total_timesteps, callback=sb3_callback)
 
+    if save_progress:
+        sb3_ppo.save("sb3_ppo_agent")
+        print("Saved SB3 PPO agent.")
+
+    #---comparison ------------------------------------------------------------
     plot_learning_curves(
         [my_ppo.metrics, sb3_metrics],
         ['My PPO', 'SB3 PPO'],
@@ -389,17 +388,58 @@ def benchmark(env, policy_net, value_net, gamma=0.99, num_train_steps=100, total
         save=True
     )
 
+    if save_progress:
+        with open('ppo_metrics.pkl', 'wb') as f:
+            pickle.dump(my_ppo.metrics, f)
+        with open('sb3_metrics.pkl', 'wb') as f:
+            pickle.dump(sb3_metrics, f)
+        print("Progress saved to 'ppo_metrics.pkl' and 'sb3_metrics.pkl'.")
 
-def main():
-    print('\n\n\n\n')
-    env = gym.make("CartPole-v1", render_mode="human")  
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.n
+    # Visualize both agents' play after training for visual comparison 
+    # Wait for user to react before showing the performance game
+    
+    if visualize:
+        input("Training finished! Ready to see the performance of the trained agents? Stable baseline goes first. (Press Enter to continue)")
+        visualize_agent(env, "SB3 PPO", lambda obs: sb3_ppo.predict(obs, deterministic=True)[0].item())
+    
+        input("Watching custom PPO (Press Enter to continue)")
+        visualize_agent(env, "Custom PPO", lambda obs: policy_net.get_action(torch.tensor(obs, dtype=torch.float32), from_distribution=False).item())
+
+def visualize_agent(env, agent_name, action_fn, num_episodes=3):
+    import time
+    #print(f"\n--- Watching {agent_name} ---")
+    for ep in range(num_episodes):
+        obs, _ = env.reset()
+        done = False
+        total_reward = 0
+        while not done:
+            env.render()
+            action = action_fn(obs)
+            obs, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            total_reward += reward
+            time.sleep(0.02)
+        print(f"{agent_name} Episode {ep+1}: Reward = {total_reward}")
+
+def main(visualize=True, snake_env=False):
+    print('\n\n')
+    print('------------------new run------------------------------------------------------')
+    if snake_env:
+        from gym_style_snake import GymStyleSnake
+        # Set render_mode="none" for training (no rendering)
+        env = GymStyleSnake(aware_length=10, disallow_backward=True, render_mode="none")
+        state_dim = env.observation_space.shape[0]
+        action_dim = env.action_space.n
+    else:
+        import gym
+        env = gym.make("CartPole-v1", render_mode="human")  
+        state_dim = env.observation_space.shape[0]
+        action_dim = env.action_space.n
 
     policy_net = PolicyNet(state_dim, action_dim)
     value_net = ValueNet(state_dim)
     
-    benchmark(env, policy_net, value_net, gamma=0.99, num_train_steps=100, total_timesteps=15000)
+    benchmark(env, policy_net, value_net, gamma=0.99, num_train_steps=100, total_timesteps=30000, visualize=visualize)
     env.close()
 
 
@@ -420,5 +460,6 @@ class SB3MetricsCallback(BaseCallback):
 
 
 if __name__ == "__main__":
-    main()
-
+    # To use snake: main(snake_env=True)
+    # To use CartPole: main(snake_env=False)
+    main(visualize=True, snake_env=True)
