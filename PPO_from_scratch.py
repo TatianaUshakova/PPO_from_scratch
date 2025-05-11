@@ -1,18 +1,28 @@
+"""Core PPO implementation with policy and value networks.
+
+This module provides the basic PPO implementation including:
+1. PPO trainer class
+2. Policy network
+3. Value network
+"""
+
 import pygame # type: ignore
 import torch
 import torch.nn as nn
 import numpy as np
 import gym
-from stable_baselines3.common.callbacks import BaseCallback #this is for bench with ppo stable baseline - getting info from this ppo
-import pickle
+#from stable_baselines3.common.callbacks import BaseCallback #this is for bench with ppo stable baseline - getting info from this ppo
+#import pickle
+from visualization import plot_learning_curves
 
 
 class PPO_trainer():
-    def __init__(self, env, policy_net, value_net, gamma):
+    def __init__(self, env, policy_net, value_net, gamma, render=False):
         self.policy_net = policy_net
         self.value_net = value_net
         self.game = env
-        self.gamma= gamma #disc factor 
+        self.gamma = gamma #disc factor 
+        self.render = render
         self.policy_optimizer = torch.optim.Adam(policy_net.parameters(), lr=3e-4)
         self.value_optimizer =torch.optim.Adam(value_net.parameters(), lr=3e-4)
         
@@ -52,7 +62,7 @@ class PPO_trainer():
 
             while not done: 
 
-                if traj % 10 == 0:
+                if self.render and traj % 10 == 0:
                     self.game.render()
 
                 state_tensor = torch.tensor(state, dtype=torch.float32)
@@ -204,21 +214,26 @@ class PPO_trainer():
                 break
 
 
-
 class PolicyNet(nn.Module):
     def __init__(self, state_dim, action_dim):
         super().__init__()
+        # Match SB3's default MLP architecture
         self.model = nn.Sequential(
             nn.Linear(state_dim, 64),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(64, 64),
-            nn.ReLU(),
-            nn.Linear(64, action_dim),
+            nn.Tanh(),
+            nn.Linear(64, action_dim, bias=False),  # No bias in last layer
             nn.Softmax(dim=-1)
         )
         
-        # Initialize the last layer with smaller weights to make initial policy more random
-        nn.init.uniform_(self.model[-2].weight, -0.01, 0.01)
+        # Initialize using orthogonal initialization (like SB3)
+        for m in self.model.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        
     def forward(self, x):
         return self.model(x)
         
@@ -277,11 +292,22 @@ class ValueNet(nn.Module):
     '''
     def __init__(self, state_dim: int):
         super().__init__()
+        # Match SB3's default MLP architecture
         self.model = nn.Sequential(
             nn.Linear(state_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
+            nn.Tanh(),
+            nn.Linear(64, 64),
+            nn.Tanh(),
+            nn.Linear(64, 1, bias=False)  # No bias in last layer
         )
+        
+        # Initialize using orthogonal initialization (like SB3)
+        for m in self.model.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+                    
     def forward(self, current_state):
         if not isinstance(current_state, torch.Tensor):
             current_state = torch.tensor(current_state, dtype=torch.float32)
@@ -291,175 +317,17 @@ class ValueNet(nn.Module):
 
 
 
-
-
-def plot_learning_curves(metrics_list, labels, img_name='learning_curves.png', show=True, save=True):
-    """
-    metrics_list: list of metrics dicts, containing 'timesteps', 'episode_rewards', 
-    'episode_lengths', 'policy_losses', 'value_losses'
-    labels: list of labels for each agent
-    """
-    import matplotlib.pyplot as plt # type: ignore
-    plt.figure(figsize=(15,5))
-
-    # Rewards
-    plt.subplot(141)
-    for metrics, label in zip(metrics_list, labels):
-        plt.plot(metrics['timesteps'], metrics['episode_rewards'], label=label)
-        plt.title('Episode rewards')
-    plt.xlabel('Timesteps')
-    plt.ylabel('Mean Reward')
-    plt.legend()
-
-    # Episode length
-    plt.subplot(142)
-    for metrics, label in zip(metrics_list, labels):
-        plt.plot(metrics['timesteps'], metrics['episode_lengths'], label=label)
-        plt.title('Episode Lengths')
-    plt.xlabel('Timesteps')
-    plt.ylabel('Mean Length')
-    plt.legend()
-
-    # Policy loss 
-    plt.subplot(143)
-    for metrics, label in zip(metrics_list, labels):
-        if 'policy_losses' in metrics:
-            plt.plot(metrics['timesteps'], metrics['policy_losses'], label=label)
-    plt.title('Policy Loss')
-    plt.xlabel('Timesteps')
-    plt.ylabel('Loss')
-    plt.legend()
-
-    # Value loss 
-    plt.subplot(144)
-    for metrics, label in zip(metrics_list, labels):
-        if 'value_losses' in metrics:
-            plt.plot(metrics['timesteps'], metrics['value_losses'], label=label)
-    plt.title('Value Loss')
-    plt.xlabel('Timesteps')
-    plt.ylabel('Loss')
-    plt.legend()
-        
-    plt.tight_layout()
-    if save:
-        plt.savefig(img_name)
-        #print(f"Plot saved to {img_name}")
-    if show:
-        plt.show(block=False)
-        plt.pause(2)#seconds
-        plt.close()
-
-
-
-def benchmark(env, policy_net, value_net, gamma=0.99, num_train_steps=100, total_timesteps=50000, save_progress=True, visualize=True):
-    try:
-        from stable_baselines3 import PPO as SB3_PPO # type: ignore
-    except:
-        raise ImportError('Stable baseline is not installed')
+if __name__ == "__main__":
+    # Example usage of PPO implementation
+    env = gym.make("MountainCar-v0", render_mode="human")
+    state_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.n
     
-    #---training and saving of my ppo-------------------------------------------
-    my_ppo = PPO_trainer(env, policy_net, value_net, gamma)
-    my_ppo.train(num_train_steps, max_timesteps=total_timesteps)
-
-    if save_progress:
-        torch.save(policy_net.state_dict(), "my_ppo_policy.pt")
-        torch.save(value_net.state_dict(), "my_ppo_value.pt")
-        print("Saved custom PPO policy and value networks.")
-
-    #--stable baseline ppo-------------------------------------------------------
-    sb3_metrics = {
-        'timesteps': [],
-        'episode_rewards': [],
-        'episode_lengths': []
-    }
-    sb3_ppo = SB3_PPO('MlpPolicy', env, verbose=1, gamma=gamma)
-    sb3_callback = SB3MetricsCallback(sb3_metrics)
-    sb3_ppo.learn(total_timesteps=total_timesteps, callback=sb3_callback)
-
-    if save_progress:
-        sb3_ppo.save("sb3_ppo_agent")
-        print("Saved SB3 PPO agent.")
-
-    #---comparison ------------------------------------------------------------
-    plot_learning_curves(
-        [my_ppo.metrics, sb3_metrics],
-        ['My PPO', 'SB3 PPO'],
-        img_name='ppo_comparison.png',
-        save=True
-    )
-
-    if save_progress:
-        with open('ppo_metrics.pkl', 'wb') as f:
-            pickle.dump(my_ppo.metrics, f)
-        with open('sb3_metrics.pkl', 'wb') as f:
-            pickle.dump(sb3_metrics, f)
-        print("Progress saved to 'ppo_metrics.pkl' and 'sb3_metrics.pkl'.")
-
-    # Visualize both agents' play after training for visual comparison 
-    # Wait for user to react before showing the performance game
-    
-    if visualize:
-        input("Training finished! Ready to see the performance of the trained agents? Stable baseline goes first. (Press Enter to continue)")
-        visualize_agent(env, "SB3 PPO", lambda obs: sb3_ppo.predict(obs, deterministic=True)[0].item())
-    
-        input("Watching custom PPO (Press Enter to continue)")
-        visualize_agent(env, "Custom PPO", lambda obs: policy_net.get_action(torch.tensor(obs, dtype=torch.float32), from_distribution=False).item())
-
-def visualize_agent(env, agent_name, action_fn, num_episodes=3):
-    import time
-    #print(f"\n--- Watching {agent_name} ---")
-    for ep in range(num_episodes):
-        obs, _ = env.reset()
-        done = False
-        total_reward = 0
-        while not done:
-            env.render()
-            action = action_fn(obs)
-            obs, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
-            total_reward += reward
-            time.sleep(0.02)
-        print(f"{agent_name} Episode {ep+1}: Reward = {total_reward}")
-
-def main(visualize=True, snake_env=False):
-    print('\n\n')
-    print('------------------new run------------------------------------------------------')
-    if snake_env:
-        from gym_style_snake import GymStyleSnake
-        # Set render_mode="none" for training (no rendering)
-        env = GymStyleSnake(aware_length=10, disallow_backward=True, render_mode="none")
-        state_dim = env.observation_space.shape[0]
-        action_dim = env.action_space.n
-    else:
-        import gym
-        env = gym.make("CartPole-v1", render_mode="human")  
-        state_dim = env.observation_space.shape[0]
-        action_dim = env.action_space.n
-
     policy_net = PolicyNet(state_dim, action_dim)
     value_net = ValueNet(state_dim)
     
-    benchmark(env, policy_net, value_net, gamma=0.99, num_train_steps=100, total_timesteps=30000, visualize=visualize)
+    trainer = PPO_trainer(env, policy_net, value_net, gamma=0.99, render=True)
+    trainer.train(num_train_steps=100, max_timesteps=30000)
+    
     env.close()
 
-
-class SB3MetricsCallback(BaseCallback):
-    def __init__(self, metrics):
-        super().__init__()
-        self.metrics = metrics
-
-    def _on_step(self) -> bool:
-        # Check if episode is done
-        if len(self.locals['infos']) > 0 and 'episode' in self.locals['infos'][0]:
-            reward = self.locals['infos'][0]['episode']['r']
-            length = self.locals['infos'][0]['episode']['l']
-            self.metrics['timesteps'].append(self.num_timesteps)
-            self.metrics['episode_rewards'].append(reward)
-            self.metrics['episode_lengths'].append(length)
-        return True
-
-
-if __name__ == "__main__":
-    # To use snake: main(snake_env=True)
-    # To use CartPole: main(snake_env=False)
-    main(visualize=True, snake_env=True)
