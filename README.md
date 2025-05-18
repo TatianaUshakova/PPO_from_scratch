@@ -12,10 +12,10 @@ Both agents learned to solve the game:
 
 Stable baseline PPO:
 
-
+![](sb3_ppo.gif)
 
 My PPO:
-
+![](my_ppo.gif)
 
 
 Also there are very unfinished notes on RL (I will add new material I learned recently soon)
