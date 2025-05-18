@@ -16,7 +16,7 @@ Stable baseline PPO:
 
 My PPO:
 
-![](my_ppo.gif)
+
 
 Also there are very unfinished notes on RL (I will add new material I learned recently soon)
 
