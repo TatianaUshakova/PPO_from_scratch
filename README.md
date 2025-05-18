@@ -12,12 +12,12 @@ Both agents learned to solve the game:
 
 Stable baseline PPO:
 
-   <video src="training_runs/20250517_042955/videos/sb3_ppo/rl-video-episode-0.mp4" width="320" height="240" controls>
+   <video src="/training_runs/20250517_042955/videos/sb3_ppo/rl-video-episode-0.mp4" width="320" height="240" controls>
    </video>
 
 My PPO:
 
-   <video src="training_runs/20250517_042955/videos/custom_ppo/rl-video-episode-0.mp4" width="320" height="240" controls>
+   <video src="/training_runs/20250517_042955/videos/custom_ppo/rl-video-episode-0.mp4" width="320" height="240" controls>
    </video>
 
 
