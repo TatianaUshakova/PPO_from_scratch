@@ -24,7 +24,6 @@ Also there are very unfinished notes on RL (I will add new material I learned re
 To be added soon (polishing the last details): 
 
 - new topics to the notes
-- plots and videos for comparison of my implementation of ppo and stable baseline ppo
 - parallelized version of ppo
 
 
