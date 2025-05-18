@@ -12,10 +12,11 @@ Both agents learned to solve the game:
 
 Stable baseline PPO:
 
-![](sb3_ppo.gif)
+<img src="sb3_ppo.gif" width="300" height="200">
 
 My PPO:
-![](my_ppo.gif)
+
+<img src="my_ppo.gif" width="300" height="200">
 
 
 Also there are very unfinished notes on RL (I will add new material I learned recently soon)
