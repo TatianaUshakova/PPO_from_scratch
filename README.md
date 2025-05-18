@@ -12,14 +12,11 @@ Both agents learned to solve the game:
 
 Stable baseline PPO:
 
-   <video src="/training_runs/20250517_042955/videos/sb3_ppo/rl-video-episode-0.mp4" width="320" height="240" controls>
-   </video>
+
 
 My PPO:
 
-   <video src="/training_runs/20250517_042955/videos/custom_ppo/rl-video-episode-0.mp4" width="320" height="240" controls>
-   </video>
-
+![](my_ppo.gif)
 
 Also there are very unfinished notes on RL (I will add new material I learned recently soon)
 
