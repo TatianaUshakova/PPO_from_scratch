@@ -1,0 +1,2 @@
+Environment: Acrobot-v1
+Total timesteps: 300000
